@@ -91,7 +91,7 @@ def _(mo, urllib):
     url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
 
     urllib.request.urlretrieve(url, filename)
-    preview_text = "".join(open(filename).readlines()[:20])
+    preview_text = "".join(open(filename).readlines()[:10])
 
     mo.md(f"```text\n{preview_text}\n```")
     return
@@ -120,11 +120,11 @@ def _():
 
             # Construction dictionary as: {'character' : 'int'}
             index = 0
-            self.dictionary = {}
+            self.dictionary = {} 
             if mask_token == True:
-                self.dictionary = {'⒨': 0}
+                self.dictionary = {'⒨': 0} # special "[Mask]" token
                 index = 1
-            for char in text:
+            for char in text: 
                 if char in self.dictionary:
                     continue
                 self.dictionary[char] = index
@@ -263,10 +263,12 @@ def _(mo):
 @app.cell
 def _(device, random, seq_len, torch, train_text, transformer):
     def grab_chunk(src):
+        # Randomly sample text from shakespeare dataset
         start = random.randint(0, len(src) - seq_len)
         return torch.tensor(transformer.encoder.encode(src[start:start + seq_len]), device=device)
 
     def add_noise(x, t):
+        # Randomly corrupt text
         mask = (torch.rand_like(x, dtype=torch.float) < t).long()
         return (x * (1 - mask), mask)
 
@@ -282,12 +284,9 @@ def _(mo):
     mo.md(r"""
     ### Training 🎭
 
-    1. Sample chunk of text data: $x_0 \sim TinyShakespeare$
-    2. Sample masking probability for each token: $t_{token} \sim Uniform(0,1)$
-    3. Add noise as masking for each token: $x_{t,token}=x_{0,token} (1 - m)$, where $m \sim Bernoulli(t_{tokem})$
-    4. Run diffusion model $D_{\theta}$ with masked tokens: ${\hat x_0} = D_{\theta}(x_{t},t_{token})$
-    5. The prediction $\hat x_{0}$ is a categorical distribution for each token. Use cross entropy to train the model for each token: $L = -Σ ~x_{0,token}~log(\hat x_{0,token})$
-    6. Backprop
+    Randomly mask tokens. Train the network to predict clean text using cross-entropy loss:
+    $$\mathcal{L}_{MDLM} = -Σ ~x_{0,token}~\log(\hat x_{0,token})$$
+    where $x_{0,token}$ is the ground truth text and $\hat{x}_{0,token}$ is the network prediction.
     """)
     return
 
@@ -363,7 +362,7 @@ def _(mo):
 
 
 @app.cell
-def _(mo, random, torch):
+def _(mo, torch):
     def sample(model, query, length, device, total_steps=20):
 
         # Tokenize text input
@@ -377,17 +376,15 @@ def _(mo, random, torch):
 
                 # Predict probabilites for each token at each position
                 mask_prob = torch.tensor([1.0 - step / total_steps], device=device)
-                probs = torch.softmax(model.forward(x, mask_prob), dim=-1)
+                probs = torch.softmax(model(x, mask_prob), dim=-1)
 
-                # Get positions of tokens set to the special ⒨ token
                 mask_positions = (x == 0) & ~fixed
+                if not mask_positions.any():
+                    break
 
-                # Iterate overall all masked tokens
-                for pos in mask_positions.nonzero():
-                    # Randomly unmask tokens
-                    if random.random() < 1 / (total_steps - step):
-                        # Select likely token
-                        x[pos] = torch.multinomial(probs[pos], 1)
+                # Randomly unmask each masked token with probability 1 / (remaining steps)
+                unmask = mask_positions & (torch.rand(length, device=device) < 1 / (total_steps - step))
+                x[unmask] = torch.multinomial(probs[unmask], 1).squeeze(-1)
 
                 # Stream the generated text in place as it updates
                 mo.output.replace(
@@ -428,7 +425,7 @@ def _(mo):
 def _(device, mo, sample, transformer_pt):
     mo.md(f"""
     ```text
-    {sample(transformer_pt, 'To be, ', 128, device, 500)}
+    {sample(transformer_pt, 'To be, ', 128, device, 1000)}
     ```
     """)
     return
@@ -446,7 +443,9 @@ def _(mo):
 def _(mo):
     mo.md(r"""
     ### Uniform State Diffusion Models (USDM) ☯️
-    - This approach...
+    - This approach replaces the corruption process
+    - Instead of masking tokens, they are randomly replaced with another token
+    - Unlike masked diffusion,  uniform diffusion allows tokens to change multiple times during generation
     """)
     return
 
@@ -455,7 +454,7 @@ def _(mo):
 def _(mo):
 
     mo.image(
-        src="https://substackcdn.com/image/fetch/$s_!Ngmd!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2Fa17c650b-92a1-4b6d-9fa9-98f57382902d_2306x1132.png",
+        src="./masked_and_uniform_diffusion.png",
     )
     return
 
@@ -497,10 +496,12 @@ def _(mo):
 @app.cell
 def _(device, random, seq_len, tokenizer_usdm, torch, train_text):
     def grab_chunk_usdm(src):
+        # Randomly sample text from shakespeare dataset
         start = random.randint(0, len(src) - seq_len)
         return torch.tensor(tokenizer_usdm.encode(src[start:start + seq_len]), device=device)
 
     def add_noise_usdm(x, t):
+        # Randomly corrupt text
         vocab_size = len(tokenizer_usdm.vocab())
         mask = (torch.rand_like(x, dtype=torch.float) < t).long()
         uniform_random_tokens = torch.randint(0, vocab_size, x.shape, dtype=torch.long, device=device)
@@ -513,7 +514,7 @@ def _(device, random, seq_len, tokenizer_usdm, torch, train_text):
     return add_noise_usdm, grab_chunk_usdm
 
 
-@app.cell
+@app.cell(disabled=True)
 def _(mo):
 
     mo.image(
@@ -527,12 +528,14 @@ def _(mo):
     mo.md(r"""
     ### Training ☯️
 
-    1. Sample chunk of text data: $x_0 \sim TinyShakespeare$
-    2. Sample corruption probability for each token: $t_{token} \sim Uniform(0,1)$
-    3. Add noise for each token: $x_{t,token}=x_{0,token} (1 - m) + u \cdot m$, where $m \sim Bernoulli(t_{token})$ and $u$ is a uniformly sampled token
-    4. Run diffusion model $D_{\theta}$ with corrupted tokens: ${\hat x_0} = D_{\theta}(x_{t},t_{token})$
-    5. The prediction $\hat x_{0}$ is a categorical distribution for each token. Use cross entropy over *every* position (not just the corrupted ones) to train the model: $L = -Σ ~x_{0,token}~log(\hat x_{0,token})$
-    6. Backprop
+    USDM corrupts tokens changes a subset of token to other tokens at random. It then predict the clean, uncorrupt text using this loss function:
+
+    \begin{aligned}
+    & \mathcal{L}_{\text {Duo }}^{\text {NELBO }}\left(q, p_\theta ; \mathbf{x}\right)
+    =\mathbb{E}_{t \sim \mathcal{U}[0,1], q_t} \sum_{\ell=1}^L-\frac{\alpha_t^{\prime}}{K \alpha_t}\left[\frac{K}{\overline{\mathbf{x}}_i^{\ell}}-\frac{K}{\left(\overline{\mathbf{x}}_\theta^{\ell}\right)_i}\right. -\left(\kappa_t \mathbb{1}_{\mathbf{z}_t^{\ell}=\mathbf{x}^{\ell}}+\mathbb{1}_{\mathbf{z}_t^{\ell} \neq \mathbf{x}^{\ell}}\right) \sum_{j=1}^L \log \frac{\left(\overline{\mathbf{x}}_\theta^{\ell}\right)_i}{\left(\overline{\mathbf{x}}_\theta^{\ell}\right)_j} -K \frac{\alpha_t}{1-\alpha_t} \log \frac{\left(\overline{\mathbf{x}}_\theta^{\ell}\right)_i}{\left(\overline{\mathbf{x}}_\theta^{\ell}\right)_m} \mathbb{1}_{\mathbf{z}_t^{\ell} \neq \mathbf{x}^{\ell}} \left.-\left((K-1) \kappa_t \mathbb{1}_{\mathbf{z}_t^{\ell}=\mathbf{x}^{\ell}}-\frac{1}{\kappa_t} \mathbb{1}_{\mathbf{z}_t^{\ell} \neq \mathbf{x}^{\ell}}\right) \log \kappa_t\right],
+    \end{aligned}
+
+    ...but also cross-entropy loss seems to work...
     """)
     return
 
@@ -599,7 +602,7 @@ def _(mo, torch):
         def forward(self, t):
             t = (1 - self.eps) * t
             alpha_t = 1 - t
-            dalpha_t = -(1 - self.eps)
+            dalpha_t = - (1 - self.eps)
             return dalpha_t, alpha_t
 
     def sample_usdm(model, query, length, device, total_steps=20):
@@ -608,9 +611,9 @@ def _(mo, torch):
         noise = LogLinear()
         vocab_size = len(model.encoder.vocab())
 
-        # Tokenize text input
+        # Tokenize text input, all other positions start as uniformly random tokens
         tokens = model.encoder.encode(query)
-        x = torch.randint(0, vocab_size, (1, length), dtype=torch.long, device=device)
+        x = torch.randint(0, vocab_size, (1, length,), dtype=torch.long, device=device)
         x[0, :len(tokens)] = torch.tensor(tokens, device=device)
         prompt_mask = torch.arange(x.shape[1], device=device) >= len(tokens)
 
@@ -621,27 +624,18 @@ def _(mo, torch):
 
                 # Predict probabilites for each token at each position
                 t = timesteps[step].view(-1)
-                probs = torch.softmax(model.forward(x, t), dim=-1)
+                probs = torch.softmax(model(x, t), dim=-1)[0]
 
-                # Analytic posterior for the uniform-state forward process
                 _, alpha_t = noise(t)
-                if step == total_steps - 1:
-                    alpha_s = torch.ones_like(alpha_t)
-                else:
-                    _, alpha_s = noise(t - (1 - eps) / total_steps)
-                alpha_ts = alpha_t / alpha_s
-                d_alpha = alpha_s - alpha_t
-                for pos in prompt_mask.nonzero():
-                    # Equation 4 in https://arxiv.org/pdf/2506.10892
-                    x_one_hot = F.one_hot(x[0, pos.item()], vocab_size).to(x.dtype).to(x.device)
-                    posterior = (alpha_t * vocab_size * x_one_hot * probs[0, pos.item()] + (
-                        alpha_ts - alpha_t) * probs[0, pos.item()] + d_alpha * x_one_hot + (
-                        1 - alpha_ts) * (1 - alpha_s) / vocab_size) / (
-                            alpha_t * vocab_size * torch.gather(
-                            x_one_hot, -1, x[0, pos.item()][..., None]) + (1 - alpha_t))
+                alpha_s = torch.ones_like(alpha_t) if step == total_steps - 1 else noise(t - (1 - eps) / total_steps)[1]
+                alpha_ts, d_alpha = alpha_t / alpha_s, alpha_s - alpha_t
 
-                    # Sample token from categorical distribution
-                    x[0, pos.item()] = torch.multinomial(posterior, 1)
+                # Equation 4 in https://arxiv.org/pdf/2506.10892, for every position at once
+                x_one_hot = F.one_hot(x[0], vocab_size)
+                posterior = (alpha_t * vocab_size * x_one_hot * probs + (alpha_ts - alpha_t) * probs + d_alpha * x_one_hot + (1 - alpha_ts) * (1 - alpha_s) / vocab_size) / (alpha_t * vocab_size * x_one_hot.gather(-1, x[0, :, None]) + (1 - alpha_t))
+
+                # Sample non-prompt tokens from their categorical distributions
+                x[0, prompt_mask] = torch.multinomial(posterior[prompt_mask], 1).squeeze(-1)
 
                 # Stream the generated text in place as it updates
                 mo.output.replace(
@@ -678,7 +672,7 @@ def _(mo):
 def _(device, mo, sample_usdm, transformer_usdm_pt):
     mo.md(f"""
     ```text
-    {sample_usdm(transformer_usdm_pt, 'To be, ', 128, device, 100)}
+    {sample_usdm(transformer_usdm_pt, 'To be, ', 128, device, 1000)}
     ```
     """)
     return
